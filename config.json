@@ -1,0 +1,54 @@
+{
+  "name": "Aiko",
+  "personality": "friendly and cheerful",
+  "device": "cuda",
+  "fast_model": "saiga-mistral:7b-lora-custom-q4_K",
+  "smart_model": "deepseek-r1-distill:8b-q4_K_M",
+  "tts_model": "cosyvoice-2",
+  "tts_voice": "alloy",
+  "language": "ru",
+  "stt_model": "base",
+  "audio_duration": 3.0,
+  "memory_db_path": "./.data/memory.sqlite",
+  "memory_chroma_path": "./.data/chroma",
+  "personalization_db": "user_profiles.db",
+  "osc_luppet_port": 39539,
+  "osc_vseeface_port": 39540,
+  "osc_unity_port": 39541,
+  "debug_mode": false,
+  "auto_mood": true,
+
+  "devices": {
+    "llm": "cuda:0",
+    "audio": "cuda:1",
+    "stt": "cuda:1",
+    "tts": "cuda:1",
+    "avatar": "cuda:1"
+  },
+
+  "llm": {
+    "model": "mistral",
+    "context": 8192
+  },
+
+  "audio": {
+    "tts_model": "cosyvoice",
+    "stt_model": "faster-whisper"
+  },
+
+  "stt": {
+    "model_size": "small",
+    "device": "auto",
+    "compute_type": "float16",
+    "beam_size": 1,
+    "sample_rate": 16000,
+    "chunk_sec": 0.5,
+
+    "vad_backend": "silero_onnx",
+    "silero_model_path": "./models/silero_vad.onnx",
+    "speech_threshold": 0.55,
+    "silence_threshold": 0.45,
+    "min_speech_ms": 200,
+    "min_silence_ms": 500
+  }
+}
