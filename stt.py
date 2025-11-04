@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import math
+import logging
+logger = logging.getLogger(__name__)
 from typing import Optional, Callable, Deque, Tuple
 from collections import deque
 
@@ -138,6 +140,21 @@ class WhisperSTT:
         if self._vad is None:
             raise RuntimeError("No VAD backend available (Silero ONNX or WebRTC).")
 
+    async def health_check(self) -> bool:
+        """Проверка доступности аудиоустройства."""
+        if sd is None:
+            return False
+        try:
+            with sd.InputStream(
+                samplerate=self.sr,
+                channels=1,
+                dtype="int16",
+                blocksize=512
+            ) as stream:
+                return stream.active
+        except Exception:
+            return False
+
         # ASR init
         dev = "cpu"
         if device in ("cuda", "auto"):
@@ -169,53 +186,73 @@ class WhisperSTT:
         self._lock = asyncio.Lock()
 
     # -------------------- public API --------------------
-    async def listen(self) -> str:
-        """Capture mic until end-of-speech and return final recognized text."""
+    async def listen(self, timeout: float = 30.0) -> str:
+        """Безопасное распознавание с обработкой всех ошибок."""
         if sd is None:
-            raise RuntimeError("sounddevice is not available for microphone capture")
-
-        # reset state
-        self._speaking = False
-        self._speech_buf.clear()
-        self._queue.clear()
-
-        stream = sd.InputStream(samplerate=self.sr, channels=1, dtype="int16", blocksize=self.chunk_len)
-        with stream:
-            final_text = ""
-            # background ASR pump
-            asr_task = asyncio.create_task(self._asr_loop())
-
-            try:
-                while True:
-                    await asyncio.sleep(0)  # yield
-                    frames, overflowed = stream.read(self.chunk_len)  # numpy int16
-                    if overflowed and self.on_metrics:
+            raise RuntimeError("sounddevice is not available")
+        
+        stream = None
+        asr_task = None
+        
+        try:
+            stream = sd.InputStream(
+                samplerate=self.sr,
+                channels=1,
+                dtype="int16",
+                blocksize=self.chunk_len
+            )
+            with stream:
+                if not stream.active:
+                    raise RuntimeError("Audio stream failed to activate")
+                
+                final_text = ""
+                asr_task = asyncio.create_task(self._asr_loop())
+                
+                try:
+                    while True:
+                        await asyncio.sleep(0)
                         try:
-                            self.on_metrics(float('nan'))
-                        except Exception:
-                            pass
-                    chunk = frames.reshape(-1).copy()
-
-                    # metrics (optional)
-                    if self.on_metrics:
-                        self.on_metrics(_dbfs(chunk))
-
-                    is_speech, ev = self._vad_step(chunk)
-
-                    if is_speech:
-                        # send chunk(s) to ASR queue
-                        self._queue.append(chunk)
-                    else:
-                        if ev == "speech_end":
-                            # Wait a short tail to ensure ASR flushed
-                            await asyncio.sleep(0.01)
-                            final_text = await self._flush_and_get_final()
-                            break
-            finally:
-                self._closed = True
-                with contextlib.suppress(Exception):
-                    asr_task.cancel()
-
+                            frames, overflowed = stream.read(self.chunk_len)
+                            if overflowed:
+                                logger.warning("Audio buffer overflow detected")
+                        except sd.PortAudioError as e:
+                            logger.error(f"PortAudio error: {e}")
+                            await asyncio.sleep(0.1)
+                            continue
+                        
+                        chunk = frames.reshape(-1).copy()
+                        if self.on_metrics:
+                            try:
+                                self.on_metrics(_dbfs(chunk))
+                            except Exception:
+                                pass
+                    
+                        is_speech, ev = self._vad_step(chunk)
+                        if is_speech:
+                            self._queue.append(chunk)
+                        else:
+                            if ev == "speech_end":
+                                await asyncio.sleep(0.01)
+                                final_text = await self._flush_and_get_final()
+                                break
+                except asyncio.TimeoutError:
+                    logger.debug("Listen timeout")
+                    return ""
+                finally:
+                    self._closed = True
+        except sd.PortAudioError as e:
+            logger.error(f"PortAudio initialization failed: {e}")
+            raise RuntimeError(f"Audio device error: {e}") from e
+        except Exception as e:
+            logger.exception(f"Unexpected error in listen(): {e}")
+            raise
+        finally:
+            if asr_task and not asr_task.done():
+                asr_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asr_task
+            self._queue.clear()
+            self._speech_buf.clear()
         return final_text.strip()
 
     # -------------------- internals --------------------
