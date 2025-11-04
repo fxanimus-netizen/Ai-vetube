@@ -43,6 +43,8 @@ from core.config import VTuberConfig
 # Импорт полнодуплексного режима
 from duplex_dialogue import DuplexDialogueManager, InterruptionStrategy
 
+from memory import HybridMemory
+
 # Для ловли ошибок аудио (опционально)
 try:
     import sounddevice as sd
@@ -448,23 +450,27 @@ class VTuberSystem:
                     )
                 
                 # ========== 10. ФОНОВЫЕ ЗАДАЧИ (не блокируют диалог) ==========
-                
-                # Адаптация личности
-                asyncio.create_task(
-                    self.core.adapt_personality(user_text, reply)
+
+            asyncio.create_task(
+                self.core.adapt_personality(
+                    user_text, 
+                    reply,
+                    username="guest",      
+                    platform="voice"
                 )
-                
-                # Обновление статистики пользователя
-                asyncio.create_task(
-                    self.core.update_user_interaction(
-                        username="guest",
-                        user_message=user_text,
-                        bot_response=reply,
-                        emotion=emotion_name,
-                        platform="voice"
-                    )
+            )
+
+                # Обновление статистики пользователя (уже было корректно)
+            asyncio.create_task(
+                self.core.update_user_interaction(
+                    username="guest",
+                    user_message=user_text,
+                    bot_response=reply,
+                    emotion=emotion_name,
+                    platform="voice"
                 )
-                
+            )
+
                 # Успех — сбрасываем счётчик ошибок
                 error_count = 0
                 

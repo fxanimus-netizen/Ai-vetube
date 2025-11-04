@@ -285,6 +285,39 @@ class PersonalizationManager:
             return "- Be concise and clear\n- Keep a calm, helpful tone"
         return "- Be warm and friendly\n- Mirror user's vibe lightly"
 
+    async def save_user_profile(self, user_id: str, profile: Dict) -> None:
+        """
+        Сохраняет обновлённый профиль пользователя в БД.
+        
+        Args:
+            user_id: идентификатор пользователя
+            profile: словарь с данными профиля
+        """
+        conn = self._ensure_open()
+        
+        async with self._writer_sem:
+            await conn.execute("""
+                UPDATE users
+                SET username=?, interaction_count=?, last_seen=?, user_tier=?,
+                    communication_style=?, favorite_topics=?, disliked_topics=?,
+                    emotional_bonds=?, custom_nickname=?, personality_traits=?
+                WHERE user_id=?
+            """, (
+                profile.get("username"),
+                profile.get("interaction_count", 0),
+                profile.get("last_seen"),
+                profile.get("user_tier"),
+                profile.get("communication_style"),
+                json.dumps(profile.get("favorite_topics", [])),
+                json.dumps(profile.get("disliked_topics", [])),
+                profile.get("emotional_bonds", 0.0),
+                profile.get("custom_nickname"),
+                json.dumps(profile.get("personality_traits", {})),
+                user_id
+            ))
+            await conn.commit()
+            logger.debug(f"💾 Профиль сохранён: {user_id[:8]}...")
+
 
 # Singleton helpers from original
 _PM_SINGLETON: PersonalizationManager | None = None

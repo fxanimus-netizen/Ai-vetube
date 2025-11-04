@@ -9,7 +9,7 @@ masters/core_master.py — Ядро VTuber системы (MasterCore)
 - Настроением бота (MoodManager)
 - Конфигурацией системы (VTuberConfig)
 
-Версия: 1.0 (2025-11-03)
+Версия: 1.0 (2025-11-03) + PATCH (2025-11-04)
 """
 
 from __future__ import annotations
@@ -41,17 +41,21 @@ class AdaptivePersonalityFallback:
     def __init__(self, personalization: PersonalizationManager):
         self.personalization = personalization
     
-    async def analyze_and_update(self, user_text: str, model_reply: str) -> None:
+    async def analyze_and_update(self, user_text: str, model_reply: str, user_id: str) -> None:
         """Простейшая адаптация на ключевых словах"""
         import re
         from datetime import datetime
+        
+        if not user_id or not user_id.strip():
+            logger.warning("⚠️ Fallback: user_id не передан")
+            return
         
         mood = self._detect_mood(user_text, model_reply)
         tone = self._detect_tone(user_text, model_reply)
         style = self._detect_style(user_text, model_reply)
         
         changed = False
-        profile = getattr(self.personalization, "profile", {}) or {}
+        profile = await self.personalization.get_user_profile(user_id)
         
         if mood and profile.get("mood") != mood:
             profile["mood"] = mood
@@ -67,12 +71,7 @@ class AdaptivePersonalityFallback:
         
         if changed:
             profile["last_update"] = datetime.now().isoformat(timespec="seconds")
-            try:
-                self.personalization.profile = profile
-                if hasattr(self.personalization, "save_profile"):
-                    self.personalization.save_profile()
-            except Exception as e:
-                logger.warning(f"Не удалось сохранить персонализацию: {e}")
+            await self.personalization.save_user_profile(user_id, profile)
     
     def _detect_mood(self, user_text: str, reply: str) -> Optional[str]:
         text = f"{user_text} {reply}".lower()
@@ -375,9 +374,15 @@ class MasterCore(BaseMaster):
     
     # ==================== API: АДАПТАЦИЯ ЛИЧНОСТИ ====================
     
-    async def adapt_personality(self, user_text: str, bot_reply: str) -> None:
+    async def adapt_personality(
+        self, 
+        user_text: str, 
+        bot_reply: str,
+        username: str = "guest",
+        platform: str = "voice"
+    ) -> None:
         """
-        Адаптировать личность на основе последнего диалога.
+        Адаптировать личность на основе диалога с автоматическим определением user_id.
         
         Анализирует:
         - Тональность пользователя
@@ -387,16 +392,27 @@ class MasterCore(BaseMaster):
         Args:
             user_text: текст пользователя
             bot_reply: ответ бота
+            username: имя пользователя (для получения user_id)
+            platform: платформа общения
         """
         if not self.adaptive:
             self.logger.debug("⚠️ Адаптация личности недоступна")
             return
         
         try:
-            await self.adaptive.analyze_and_update(user_text, bot_reply)
-            self.logger.debug("🧠 Личность адаптирована")
+            # ✅ ИСПРАВЛЕНО: Получаем user_id через PersonalizationManager
+            user_id = self.personalization.get_user_id(username, platform)
+            
+            # ✅ Передаем явно в analyze_and_update
+            await self.adaptive.analyze_and_update(
+                user_text, 
+                bot_reply,
+                user_id=user_id
+            )
+            self.logger.debug(f"🧠 Личность адаптирована для {username} ({user_id[:8]}...)")
+            
         except Exception as e:
-            self.logger.error(f"❌ Ошибка адаптации личности: {e}")
+            self.logger.error(f"❌ Ошибка адаптации личности: {e}", exc_info=True)
     
     # ==================== API: НАСТРОЕНИЕ ====================
     

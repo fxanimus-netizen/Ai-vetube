@@ -1,7 +1,10 @@
 # personalization_adaptive.py
 import re
 import datetime
+import logging
 from typing import Optional
+
+logger = logging.getLogger("AdaptivePersonality")
 
 class AdaptivePersonality:
     def __init__(self, personalization_manager):
@@ -10,13 +13,27 @@ class AdaptivePersonality:
         self.conf_decay = 0.2               # насколько быстро падает доверие
         self.conf_gain = 0.4                # насколько быстро растёт при подтверждении
 
-    async def analyze_and_update(self, user_text: str, assistant_text: str):
-        user_id = getattr(self.pm, "current_user_id", None)
-        if not user_id:
+    async def analyze_and_update(
+        self, 
+        user_text: str, 
+        assistant_text: str,
+        user_id: str  # ✅ ИСПРАВЛЕНО: user_id передается явно
+    ):
+        """
+        Анализ диалога и обновление профиля пользователя.
+        
+        Args:
+            user_text: текст пользователя
+            assistant_text: ответ ассистента
+            user_id: идентификатор пользователя (обязательно!)
+        """
+        if not user_id or not user_id.strip():
+            logger.warning("⚠️ analyze_and_update вызван без user_id — пропускаем")
             return
 
         profile = await self.pm.get_user_profile(user_id)
         if not profile:
+            logger.warning(f"⚠️ Профиль для {user_id[:8]}... не найден")
             return
 
         mood = self.detect_mood(user_text)
@@ -61,6 +78,7 @@ class AdaptivePersonality:
         if changes:
             profile["last_update"] = datetime.datetime.utcnow().isoformat()
             await self.pm.save_user_profile(user_id, profile)
+            logger.debug(f"💾 Профиль обновлён: {user_id[:8]}... (mood={mood}, style={new_style})")
 
     # --- эвристики ниже прежние ---
     def detect_mood(self, text: str) -> Optional[str]:
