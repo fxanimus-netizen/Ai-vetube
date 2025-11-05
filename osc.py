@@ -1,9 +1,11 @@
 """
-osc.py — финальная версия
+osc.py — финальная версия с безопасным управлением ресурсами
 - Восстановлен Luppet MIDI Pose Bridge (без головы: Head исключён из MIDI).
 - Асинхронная set_emotion() (совместима с `await avatar.set_emotion(...)`).
 - Поддержка VSeeFace/Unity по VMC: /VMC/Ext/Blend/Apply, /VMC/Ext/Bone/Pos, /VMC/Ext/Talk.
 - Неблокирующая pulse_emotion_async().
+- ✅ ИСПРАВЛЕНО: Безопасное закрытие MIDI/OSC с идемпотентностью и __del__.
+- ✅ Защита от повторного вызова close() и автоматическая очистка ресурсов.
 """
 
 from __future__ import annotations
@@ -46,6 +48,10 @@ class LuppetPoseBridge:
     def __init__(self, port_name: str = "LuppetBridge", virtual: bool = True):
         if not _MIDI_AVAILABLE:
             raise RuntimeError("mido не установлен — MIDI-бридж недоступен")
+        
+        self._closed = False
+        self.out = None
+        
         try:
             if virtual:
                 self.out = mido.open_output(port_name, virtual=True)
@@ -108,10 +114,28 @@ class LuppetPoseBridge:
                 pass
 
     def close(self) -> None:
-        try:
-            self.out.close()
-        except Exception:
-            pass
+        """Безопасное закрытие с идемпотентностью"""
+        if self._closed:
+            return
+        
+        self._closed = True
+        
+        if hasattr(self, 'out') and self.out is not None:
+            try:
+                self.out.close()
+                logger.debug("MIDI порт закрыт")
+            except Exception as e:
+                logger.warning(f"Ошибка закрытия MIDI порта: {e}")
+            finally:
+                self.out = None
+    
+    def __del__(self):
+        """Автоматическая очистка при удалении объекта"""
+        if not self._closed:
+            try:
+                self.close()
+            except Exception:
+                pass
 
 
 class MultiTargetOSCController:
@@ -135,6 +159,8 @@ class MultiTargetOSCController:
     ):
         self.host = host
         self.enable_unity = enable_unity
+        self._closed = False
+        
         try:
             self.luppet = SimpleUDPClient(host, luppet_port)
             self.vseeface = SimpleUDPClient(host, vseeface_port)
@@ -250,26 +276,51 @@ class MultiTargetOSCController:
     # ============================== ЗАКРЫТИЕ ==============================
 
     def close(self):
-        try:
-            if self.luppet_bridge:
+        """Безопасное закрытие всех ресурсов"""
+        if self._closed:
+            return
+        
+        self._closed = True
+        
+        # 1. Закрываем MIDI-мост
+        if self.luppet_bridge:
+            try:
                 self.luppet_bridge.close()
-        except Exception:
-            pass
-                # Закрываем UDP-клиенты (SimpleUDPClient не имеет публичного close)
-        for cli in (getattr(self, 'luppet', None), getattr(self, 'vseeface', None), getattr(self, 'unity', None)):
-            if cli is not None:
-                try:
-                    sock = getattr(cli, '_sock', None)
-                    if sock:
-                        sock.close()
-                except Exception:
-                    pass
-        logger.info("OSC/MIDI closed")
+                logger.debug("MIDI-мост закрыт")
+            except Exception as e:
+                logger.warning(f"Ошибка закрытия MIDI-моста: {e}")
+            finally:
+                self.luppet_bridge = None
+        
+        # 2. Закрываем UDP-клиенты (SimpleUDPClient не имеет публичного close)
+        for name in ('luppet', 'vseeface', 'unity'):
+            client = getattr(self, name, None)
+            if client is None:
+                continue
+            
+            try:
+                # Пытаемся безопасно закрыть сокет через приватный API
+                if hasattr(client, '_sock') and client._sock:
+                    try:
+                        client._sock.close()
+                        logger.debug(f"OSC клиент {name} закрыт")
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.debug(f"Ошибка закрытия {name} OSC клиента: {e}")
+            finally:
+                setattr(self, name, None)
+        
+        logger.info("OSC/MIDI контроллер закрыт")
 
+    def __del__(self):
+        """Автоматическая очистка при удалении объекта"""
+        if not self._closed:
+            try:
+                self.close()
+            except Exception:
+                pass
 
     async def shutdown(self):
-        """Асинхронное закрытие для совместимости с системой."""
-        try:
-            await asyncio.to_thread(self.close)
-        except Exception:
-            pass
+        """Асинхронная версия закрытия для совместимости с системой"""
+        await asyncio.to_thread(self.close)
